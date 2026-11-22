@@ -1,0 +1,1411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DevFlow: Conventional Commit &amp; PR Generator</title>
+  <!-- Anti-flash: apply saved theme before first paint -->
+  <script>
+    (function(){
+      var t = localStorage.getItem("devflow_theme");
+      if (t === "light") document.documentElement.setAttribute("data-theme", "light");
+    })();
+  </script>
+  <script src="https://cdn.tailwindcss.com" defer></script>
+  <style>
+    /* ── Base ────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --surface2:  #22263a;
+      --border:    #2d3148;
+      --text:      #e2e4f0;
+      --muted:     #8b90a8;
+      --accent:    #3b82f6;
+      --accent-h:  #2563eb;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --mono:      'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --sans:      -apple-system, 'Segoe UI', system-ui, sans-serif;
+    }
+
+    /* ── Light theme overrides ───────────────────────────────── */
+    [data-theme="light"] {
+      --bg:       #f4f5f7;
+      --surface:  #ffffff;
+      --surface2: #eef0f4;
+      --border:   #d0d5e0;
+      --text:     #1a1d27;
+      --muted:    #5a607a;
+      --accent:   #2563eb;
+      --accent-h: #1d4ed8;
+      --green:    #16a34a;
+      --red:      #dc2626;
+    }
+    [data-theme="light"] ::-webkit-scrollbar-track { background: var(--bg); }
+    [data-theme="light"] ::-webkit-scrollbar-thumb { background: var(--border); }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+      margin: 0;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* Typography */
+    h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+    h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+
+    /* Focus ring: replaces outline: none, meets R-32 */
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+    /* Cursor conventions (R-39) */
+    button, [role="button"], label[for], select { cursor: pointer; }
+    button:disabled, [aria-disabled="true"] { cursor: not-allowed; opacity: 0.45; }
+
+    /* ── Layout shells ───────────────────────────────────────── */
+    .app-header {
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: var(--surface);
+    }
+    .app-logo {
+      width: 28px; height: 28px;
+      background: var(--accent);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .app-logo svg { width: 16px; height: 16px; color: #fff; }
+    .app-tagline { font-size: 0.75rem; color: var(--muted); }
+
+    /* ── Theme toggle button ─────────────────────────────────── */
+    .btn-theme {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      flex-shrink: 0;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .btn-theme:hover { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.07); }
+    .btn-theme svg { width: 15px; height: 15px; pointer-events: none; }
+    /* show correct icon per theme */
+    .btn-theme .icon-moon { display: block; }
+    .btn-theme .icon-sun  { display: none; }
+    [data-theme="light"] .btn-theme .icon-moon { display: none; }
+    [data-theme="light"] .btn-theme .icon-sun  { display: block; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      height: calc(100vh - 49px);
+      overflow: hidden;
+    }
+
+    /* left panel */
+    .panel-input {
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 1.25rem 1.5rem;
+      gap: 1rem;
+    }
+
+    /* right panel */
+    .panel-output {
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 1.25rem 1.5rem;
+      gap: 1.25rem;
+    }
+
+    /* ── Form controls ───────────────────────────────────────── */
+    textarea, input[type="text"] {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 13px;
+      padding: 0.625rem 0.75rem;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    textarea { resize: vertical; }
+    textarea:focus, input[type="text"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); outline: none; }
+    textarea::placeholder, input[type="text"]::placeholder { color: var(--muted); }
+    textarea { min-height: 220px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+
+    label { display: block; font-size: 0.8rem; font-weight: 500; margin-bottom: 0.35rem; color: var(--text); }
+    .field { display: flex; flex-direction: column; }
+
+    /* ── Scope chips ─────────────────────────────────────────── */
+    .scope-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 0.5rem;
+    }
+    .scope-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 20px;        /* pill shape only for chips */
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      line-height: 1;
+      padding: 0.3rem 0.7rem;
+      min-height: 28px;
+      cursor: pointer;
+      transition: background 0.13s, border-color 0.13s, color 0.13s;
+      user-select: none;
+    }
+    .scope-chip:hover {
+      border-color: var(--accent);
+      color: var(--text);
+      background: rgba(59,130,246,0.07);
+    }
+    .scope-chip.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .scope-chip.active:hover {
+      background: var(--accent-h);
+      border-color: var(--accent-h);
+    }
+    /* check icon inside active chip */
+    .scope-chip .chip-check {
+      display: none;
+      width: 10px;
+      height: 10px;
+      flex-shrink: 0;
+    }
+    .scope-chip.active .chip-check { display: block; }
+
+    /* custom scope input row */
+    .scope-custom-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.4rem;
+    }
+    .scope-custom-row label {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      margin: 0;
+      font-family: var(--mono);
+    }
+    #scope-custom {
+      flex: 1;
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 0.3rem 0.6rem;
+      border-radius: 4px;
+      min-height: 28px;
+    }
+    /* scope section wrapper */
+    .scope-field-label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .scope-field-label span { font-weight: 400; color: var(--muted); }
+    /* live preview badge */
+    #scope-preview {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      padding: 0.1rem 0.5rem;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--surface2);
+      transition: all 0.15s;
+      margin-left: auto;
+    }
+    #scope-preview.has-value {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(59,130,246,0.08);
+    }
+
+    /* ── Primary button ──────────────────────────────────────── */
+    .btn-primary {
+      background: var(--accent);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 0.6rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: background 0.15s, opacity 0.15s;
+      width: 100%;
+      min-height: 44px;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+    .btn-primary:active:not(:disabled) { opacity: 0.85; }
+
+    /* Spinner */
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      display: none;
+    }
+    .btn-primary.loading .spinner { display: block; }
+    .btn-primary.loading .btn-label { opacity: 0.7; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Output cards ────────────────────────────────────────── */
+    .output-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .output-card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 0.9rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    .output-card-header svg { width: 14px; height: 14px; color: var(--muted); flex-shrink: 0; }
+    .output-card-title { font-size: 0.75rem; font-weight: 600; color: var(--text); flex: 1; }
+    .btn-copy {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      padding: 0.2rem 0.5rem;
+      transition: border-color 0.12s, color 0.12s, background 0.12s;
+      white-space: nowrap;
+      min-height: 26px;
+    }
+    .btn-copy:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-copy.copied { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.07); }
+    .btn-copy svg { width: 11px; height: 11px; }
+
+    .output-body {
+      padding: 1rem;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+      min-height: 100px;
+    }
+    .output-body.markdown {
+      font-family: var(--sans);
+      font-size: 13px;
+    }
+    .output-body.empty {
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 13px;
+    }
+
+    /* Commit syntax highlighting */
+    .commit-type   { color: #60a5fa; }
+    .commit-scope  { color: #a78bfa; }
+    .commit-title  { color: var(--text); }
+    .commit-body   { color: #94a3b8; }
+
+    /* Markdown preview in PR output */
+    .md-h1 { font-size: 1rem; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; margin: 0.75rem 0 0.5rem; }
+    .md-h2 { font-size: 0.875rem; font-weight: 600; margin: 0.75rem 0 0.35rem; color: #93c5fd; }
+    .md-h3 { font-size: 0.8rem; font-weight: 600; margin: 0.5rem 0 0.25rem; color: var(--muted); }
+    .md-p  { margin: 0.25rem 0; }
+    .md-li { margin: 0.1rem 0; padding-left: 1rem; }
+    .md-li::before { content: '•'; color: var(--accent); margin-right: 0.4rem; }
+    .md-check { font-size: 12px; color: var(--muted); }
+    .md-check .checked { color: var(--green); }
+    .md-check .unchecked { color: var(--border); }
+    .md-hr { border: none; border-top: 1px solid var(--border); margin: 0.75rem 0; }
+    .md-code { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 0 0.3em; font-family: var(--mono); font-size: 11.5px; }
+
+    /* ── History section ─────────────────────────────────────── */
+    .history-section { padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); }
+    .history-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; }
+    .history-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      transition: border-color 0.12s;
+    }
+    .history-item:hover { border-color: var(--accent); }
+    .history-timestamp { font-size: 10.5px; color: var(--muted); white-space: nowrap; flex-shrink: 0; margin-top: 1px; }
+    .history-preview { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    .history-empty { color: var(--muted); font-size: 12px; padding: 0.5rem 0; }
+
+    /* ── Toast ───────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(0.5rem);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 12.5px;
+      padding: 0.5rem 1rem;
+      opacity: 0;
+      transition: opacity 0.15s, transform 0.15s;
+      pointer-events: none;
+      z-index: 999;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .workspace {
+        grid-template-columns: 1fr;
+        height: auto;
+        overflow: visible;
+      }
+      .panel-input  { border-right: none; border-bottom: 1px solid var(--border); }
+      .panel-output { overflow-y: visible; }
+      .app-tagline  { display: none; }
+      .history-section { padding: 1rem; }
+    }
+
+    /* Reduced motion (R-39) */
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation: none; }
+      * { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ╔══════════════════════════════════════════════════════════╗ -->
+<!-- ║  HEADER                                                   ║ -->
+<!-- ╚══════════════════════════════════════════════════════════╝ -->
+<header class="app-header" role="banner">
+  <div class="app-logo" aria-hidden="true">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="4" cy="8" r="1.5"/>
+      <circle cx="12" cy="4" r="1.5"/>
+      <circle cx="12" cy="12" r="1.5"/>
+      <line x1="5.5" y1="7.3" x2="10.5" y2="4.7"/>
+      <line x1="5.5" y1="8.7" x2="10.5" y2="11.3"/>
+    </svg>
+  </div>
+  <h1>DevFlow</h1>
+  <span class="app-tagline">Conventional Commit &amp; PR Generator</span>
+  <button
+    type="button"
+    class="btn-theme"
+    id="btn-theme"
+    aria-label="Switch to light mode"
+    title="Toggle light/dark mode"
+  >
+    <!-- moon: shown in dark mode -->
+    <svg class="icon-moon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M13.5 10A6 6 0 0 1 6 2.5a6 6 0 1 0 7.5 7.5z"/>
+    </svg>
+    <!-- sun: shown in light mode -->
+    <svg class="icon-sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="3"/>
+      <line x1="8" y1="1" x2="8" y2="3"/>
+      <line x1="8" y1="13" x2="8" y2="15"/>
+      <line x1="1" y1="8" x2="3" y2="8"/>
+      <line x1="13" y1="8" x2="15" y2="8"/>
+      <line x1="3.05" y1="3.05" x2="4.46" y2="4.46"/>
+      <line x1="11.54" y1="11.54" x2="12.95" y2="12.95"/>
+      <line x1="12.95" y1="3.05" x2="11.54" y2="4.46"/>
+      <line x1="4.46" y1="11.54" x2="3.05" y2="12.95"/>
+    </svg>
+  </button>
+</header>
+
+<!-- ╔══════════════════════════════════════════════════════════╗ -->
+<!-- ║  WORKSPACE (input + output)                               ║ -->
+<!-- ╚══════════════════════════════════════════════════════════╝ -->
+<main class="workspace" id="workspace">
+
+  <!-- ── LEFT: Input Panel ─────────────────────────────────── -->
+  <section class="panel-input" aria-label="Input panel">
+
+    <!-- diff / notes textarea -->
+    <div class="field">
+      <label for="diff-input">Paste git diff or describe your changes</label>
+      <textarea
+        id="diff-input"
+        name="diff-input"
+        rows="12"
+        placeholder="Paste git diff output here, or describe your changes in plain language...
+
+Example:
+- Added login form with email + password validation
+- Fixed 500 error when user token expires
+- Updated README with new setup instructions"
+        aria-describedby="diff-hint"
+      ></textarea>
+      <p id="diff-hint" style="font-size:11.5px;color:var(--muted);margin:0.3rem 0 0;">
+        Accepts raw <code style="font-family:var(--mono);background:var(--surface2);border-radius:3px;padding:0 3px;">git diff</code>,
+        <code style="font-family:var(--mono);background:var(--surface2);border-radius:3px;padding:0 3px;">git status</code> output, or free-form bullet notes.
+      </p>
+    </div>
+
+    <!-- scope picker -->
+    <div class="field" id="scope-field">
+      <div class="scope-field-label">
+        <label id="scope-group-label">Scope <span>(optional)</span></label>
+        <span id="scope-preview" aria-live="polite" aria-label="Selected scope"></span>
+      </div>
+
+      <!-- preset chips -->
+      <div
+        class="scope-chips"
+        id="scope-chips"
+        role="group"
+        aria-labelledby="scope-group-label"
+      >
+        <button type="button" class="scope-chip" data-scope="frontend" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          frontend
+        </button>
+        <button type="button" class="scope-chip" data-scope="backend" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          backend
+        </button>
+        <button type="button" class="scope-chip" data-scope="ui" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          ui
+        </button>
+        <button type="button" class="scope-chip" data-scope="api" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          api
+        </button>
+        <button type="button" class="scope-chip" data-scope="auth" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          auth
+        </button>
+        <button type="button" class="scope-chip" data-scope="docs" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          docs
+        </button>
+        <button type="button" class="scope-chip" data-scope="db" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          db
+        </button>
+        <button type="button" class="scope-chip" data-scope="ci" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          ci
+        </button>
+        <button type="button" class="scope-chip" data-scope="config" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          config
+        </button>
+        <button type="button" class="scope-chip" data-scope="deps" aria-pressed="false">
+          <svg class="chip-check" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5"/></svg>
+          deps
+        </button>
+      </div>
+
+      <!-- custom scope input -->
+      <div class="scope-custom-row">
+        <label for="scope-custom">custom:</label>
+        <input
+          type="text"
+          id="scope-custom"
+          name="scope-custom"
+          placeholder="payments, i18n, search..."
+          maxlength="30"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Custom commit scope"
+        />
+      </div>
+    </div>
+
+    <!-- generate button -->
+    <button
+      type="button"
+      class="btn-primary"
+      id="btn-generate"
+      aria-label="Generate commit message and PR description"
+    >
+      <div class="spinner" aria-hidden="true"></div>
+      <svg class="btn-icon" aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 8h3l2-5 3 10 2-5h2"/>
+      </svg>
+      <span class="btn-label">Generate Commit + PR</span>
+    </button>
+
+  </section>
+
+  <!-- ── RIGHT: Output Panel ───────────────────────────────── -->
+  <section class="panel-output" id="panel-output" aria-label="Output panel">
+
+    <!-- Empty state (R-27) -->
+    <div id="empty-state" aria-live="polite">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:260px;gap:0.75rem;color:var(--muted);text-align:center;padding:2rem;">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="8" y="6" width="24" height="28" rx="3"/>
+          <line x1="13" y1="13" x2="27" y2="13"/>
+          <line x1="13" y1="18" x2="27" y2="18"/>
+          <line x1="13" y1="23" x2="21" y2="23"/>
+          <circle cx="29" cy="29" r="6" fill="var(--surface)" stroke="var(--muted)"/>
+          <line x1="27" y1="29" x2="31" y2="29"/>
+          <line x1="29" y1="27" x2="29" y2="31"/>
+        </svg>
+        <p style="font-size:0.9rem;font-weight:600;margin:0;color:var(--text);">No output yet</p>
+        <p style="font-size:0.8rem;margin:0;max-width:260px;line-height:1.5;">Paste a git diff or describe your changes on the left, then click Generate.</p>
+      </div>
+    </div>
+
+    <!-- Output cards, hidden until generation -->
+    <div id="output-cards" hidden style="flex-direction:column;gap:1.25rem;">
+
+      <!-- Commit message card -->
+      <div class="output-card" id="commit-card">
+        <div class="output-card-header">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="4 6 2 8 4 10"/>
+            <polyline points="12 6 14 8 12 10"/>
+            <line x1="9" y1="4" x2="7" y2="12"/>
+          </svg>
+          <span class="output-card-title">Commit Message</span>
+          <button class="btn-copy" id="copy-commit" aria-label="Copy commit message to clipboard">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="5" y="4" width="8" height="10" rx="1"/>
+              <path d="M11 4V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h1"/>
+            </svg>
+            <span class="copy-label">Copy commit</span>
+          </button>
+        </div>
+        <div class="output-body" id="commit-output" aria-label="Generated commit message" aria-live="polite"></div>
+      </div>
+
+      <!-- PR description card -->
+      <div class="output-card" id="pr-card">
+        <div class="output-card-header">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="4" cy="4" r="1.5"/>
+            <circle cx="4" cy="12" r="1.5"/>
+            <circle cx="12" cy="6" r="1.5"/>
+            <line x1="4" y1="5.5" x2="4" y2="10.5"/>
+            <path d="M12 7.5v2a2 2 0 0 1-2 2H5.5"/>
+            <polyline points="3 10.5 4 12 5 10.5"/>
+          </svg>
+          <span class="output-card-title">PR Description (Markdown)</span>
+          <button class="btn-copy" id="copy-pr" aria-label="Copy PR description markdown to clipboard">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="5" y="4" width="8" height="10" rx="1"/>
+              <path d="M11 4V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h1"/>
+            </svg>
+            <span class="copy-label">Copy PR draft</span>
+          </button>
+        </div>
+        <!-- Toggle: Preview / Raw Markdown -->
+        <div style="display:flex;border-bottom:1px solid var(--border);">
+          <button type="button" class="tab-btn active" id="tab-preview" aria-pressed="true" data-target="pr-preview" style="flex:1;padding:0.4rem;font-size:11.5px;background:transparent;border:none;border-right:1px solid var(--border);color:var(--text);transition:background 0.12s;">
+            Preview
+          </button>
+          <button type="button" class="tab-btn" id="tab-raw" aria-pressed="false" data-target="pr-raw" style="flex:1;padding:0.4rem;font-size:11.5px;background:transparent;border:none;color:var(--muted);transition:background 0.12s;">
+            Raw Markdown
+          </button>
+        </div>
+        <div class="output-body markdown" id="pr-preview" aria-label="PR description preview" aria-live="polite"></div>
+        <div class="output-body" id="pr-raw" hidden aria-label="Raw PR markdown" aria-live="polite" style="color:var(--muted);font-family:var(--mono);"></div>
+      </div>
+
+    </div>
+
+  </section>
+</main>
+
+<!-- ── History (below workspace on mobile, right bottom on desktop) ── -->
+<aside class="history-section" aria-label="Generation history">
+  <h2>Recent History</h2>
+  <div class="history-list" id="history-list" role="list">
+    <p class="history-empty" id="history-empty">No history yet. Generate something to get started.</p>
+  </div>
+</aside>
+
+<!-- Toast notification -->
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- ╔══════════════════════════════════════════════════════════╗ -->
+<!-- ║  JAVASCRIPT                                               ║ -->
+<!-- ╚══════════════════════════════════════════════════════════╝ -->
+<script>
+"use strict";
+
+// ══════════════════════════════════════════════════════════════
+//  RULE ENGINE: client-side parsing and generation
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Conventional commit types with their detection keywords.
+ * Detection order matters: more specific types are checked first.
+ */
+const TYPE_RULES = [
+  {
+    type: "feat",
+    emoji: "",
+    label: "New Feature",
+    keywords: [
+      /\badd(ed|ing|s)?\b/i, /\bnew\b/i, /\bintroduc/i, /\bimplement/i,
+      /\bcreate(d)?\b/i, /\bbuild\b/i, /\bsupport\b/i, /\benable\b/i,
+      /^\+\+\+.*b\//m,  // new file in diff
+    ],
+  },
+  {
+    type: "fix",
+    emoji: "",
+    label: "Bug Fix",
+    keywords: [
+      /\bfix(ed|es|ing)?\b/i, /\bbug\b/i, /\bresolve(d)?\b/i,
+      /\bpatch\b/i, /\bcorrect(ed)?\b/i, /\berror\b/i, /\bcrash\b/i,
+      /\b500\b/, /\bnull pointer\b/i, /\bundefined\b/i,
+    ],
+  },
+  {
+    type: "refactor",
+    emoji: "",
+    label: "Refactor",
+    keywords: [
+      /\brefactor\b/i, /\brestructure\b/i, /\bclean(up|ed)?\b/i,
+      /\bextract\b/i, /\bmove\b/i, /\brename\b/i, /\bsimplif/i,
+      /\boptimize\b/i, /\bimprove\b/i, /\bperformance\b/i,
+    ],
+  },
+  {
+    type: "docs",
+    emoji: "",
+    label: "Documentation",
+    keywords: [
+      /\bdoc(s|umentation)?\b/i, /\breadme\b/i, /\bcomment\b/i,
+      /\bchangelog\b/i, /\bcontribut/i, /\.md\b/i,
+    ],
+  },
+  {
+    type: "style",
+    emoji: "",
+    label: "Style",
+    keywords: [
+      /\bstyle\b/i, /\bcss\b/i, /\bformat\b/i, /\blint\b/i,
+      /\bprettier\b/i, /\bspacing\b/i, /\bindent\b/i, /\bwhitespace\b/i,
+    ],
+  },
+  {
+    type: "test",
+    emoji: "",
+    label: "Tests",
+    keywords: [
+      /\btest(s|ing|ed)?\b/i, /\bspec\b/i, /\bunit test\b/i,
+      /\be2e\b/i, /\bcoverage\b/i, /\bvitest\b/i, /\bjest\b/i,
+      /\bmocha\b/i, /\bcypress\b/i,
+    ],
+  },
+  {
+    type: "chore",
+    emoji: "",
+    label: "Chore",
+    keywords: [
+      /\bchore\b/i, /\bdependenc/i, /\bpackage\.json\b/i,
+      /\bupgrade\b/i, /\bbump\b/i, /\bconfig\b/i, /\bsetup\b/i,
+      /\bci\b/i, /\bdeploy\b/i, /\bworkflow\b/i,
+    ],
+  },
+];
+
+/**
+ * Detect commit type from input text.
+ * Returns the matched type or falls back to "chore".
+ */
+function detectType(text) {
+  const scores = {};
+  for (const rule of TYPE_RULES) {
+    scores[rule.type] = 0;
+    for (const kw of rule.keywords) {
+      const matches = (text.match(kw) || []).length;
+      scores[rule.type] += matches;
+    }
+  }
+  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  return best[1] > 0 ? best[0] : "chore";
+}
+
+/**
+ * Detect scope from diff/file paths or select value.
+ */
+function detectScope(text, explicitScope) {
+  if (explicitScope) return explicitScope;
+
+  const patterns = [
+    [/\bfrontend\b|\bcomponent|\bview\b|\bpage\b/i, "frontend"],
+    [/\bbackend\b|\bcontroller\b|\bservice\b|\brepository\b/i, "backend"],
+    [/\bapi\b|\brouter\b|\bendpoint\b/i, "api"],
+    [/\bauth\b|\blogin\b|\bregister\b|\btoken\b|\bjwt\b/i, "auth"],
+    [/\bui\b|\bcss\b|\bstyle\b/i, "ui"],
+    [/\bdb\b|\bdatabase\b|\bmigration\b|\bschema\b/i, "db"],
+    [/\bdoc\b|\breadme\b/i, "docs"],
+    [/\bci\b|\bworkflow\b|\bpipeline\b|\bgithub\b/i, "ci"],
+    [/\bdeps\b|\bpackage\b|\bdependenc/i, "deps"],
+  ];
+
+  for (const [pattern, scope] of patterns) {
+    if (pattern.test(text)) return scope;
+  }
+
+  // try to extract from diff file paths: +++ b/src/auth/login.ts
+  const pathMatch = text.match(/\+\+\+ b\/(?:src\/)?([^/\n]+)/);
+  if (pathMatch) return pathMatch[1].replace(/[^a-z0-9]/gi, "").slice(0, 20) || null;
+
+  return null;
+}
+
+/**
+ * Extract bullet points / lines of change from text.
+ * Strips diff noise and returns clean change lines.
+ */
+function extractChanges(text) {
+  const lines = text.split("\n");
+  const changes = [];
+
+  for (const raw of lines) {
+    const line = raw.trim();
+
+    // Skip diff metadata
+    if (/^(diff --git|index |---|@@|\+\+\+|Binary files)/.test(line)) continue;
+    if (/^(From |Date:|Subject:|---$)/.test(line)) continue;
+
+    // Actual diff added lines
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const content = line.slice(1).trim();
+      if (content.length > 8 && !/^\s*[{}[\]()];?\s*$/.test(content)) {
+        changes.push(content);
+      }
+      continue;
+    }
+
+    // Free-form bullet notes
+    if (/^[-*•]\s+/.test(line)) {
+      changes.push(line.replace(/^[-*•]\s+/, "").trim());
+      continue;
+    }
+
+    // Numbered list
+    if (/^\d+\.\s+/.test(line)) {
+      changes.push(line.replace(/^\d+\.\s+/, "").trim());
+      continue;
+    }
+  }
+
+  // Deduplicate, trim, cap at 12 items
+  return [...new Set(changes.filter(Boolean).map(l => l.slice(0, 100)))].slice(0, 12);
+}
+
+/**
+ * Build a concise, imperative commit title from a list of changes.
+ * Keeps it under 72 characters.
+ */
+function buildTitle(type, scope, changes) {
+  if (!changes.length) {
+    const typeLabels = {
+      feat: "add new functionality",
+      fix: "resolve reported issue",
+      refactor: "refactor codebase",
+      docs: "update documentation",
+      style: "apply code formatting",
+      test: "add test coverage",
+      chore: "update project configuration",
+    };
+    return typeLabels[type] || "apply changes";
+  }
+
+  // Take the first meaningful change, strip common verbs already in type
+  let title = changes[0]
+    .replace(/^(added|fixed|refactored|updated|created|removed)\s+/i, "")
+    .replace(/\.$/, "")
+    .trim();
+
+  // Lowercase first char for conventional style
+  title = title.charAt(0).toLowerCase() + title.slice(1);
+
+  // Truncate to stay under 50 chars before the type/scope prefix
+  const prefix = scope ? `${type}(${scope}): ` : `${type}: `;
+  const maxTitle = 72 - prefix.length;
+  if (title.length > maxTitle) title = title.slice(0, maxTitle - 1) + "…";
+
+  return title;
+}
+
+/**
+ * Generate the full conventional commit message.
+ */
+function generateCommit(text, explicitScope) {
+  const type    = detectType(text);
+  const scope   = detectScope(text, explicitScope);
+  const changes = extractChanges(text);
+  const title   = buildTitle(type, scope, changes);
+
+  const prefix  = scope ? `${type}(${scope}): ` : `${type}: `;
+  let commit    = prefix + title + "\n";
+
+  // Body: list up to 5 additional change details
+  const bodyItems = changes.slice(1, 6);
+  if (bodyItems.length) {
+    commit += "\n";
+    for (const item of bodyItems) {
+      commit += `- ${item}\n`;
+    }
+  }
+
+  return { commit, type, scope, title, changes };
+}
+
+/**
+ * Map commit type to PR change-type checkboxes.
+ */
+const TYPE_TO_CHANGE = {
+  feat:     ["feat"],
+  fix:      ["fix"],
+  refactor: ["refactor"],
+  docs:     ["docs"],
+  style:    ["style"],
+  test:     ["test"],
+  chore:    ["chore"],
+};
+
+/**
+ * Generate a Markdown PR description from parsed commit data.
+ */
+function generatePR({ type, scope, title, changes }) {
+  const changeTypes = {
+    feat:     "New Feature",
+    fix:      "Bug Fix",
+    refactor: "Refactor / Code Cleanup",
+    docs:     "Documentation Update",
+    style:    "Style / Formatting",
+    test:     "Tests",
+    chore:    "Chore / Config",
+  };
+
+  const allTypes = ["feat", "fix", "refactor", "docs", "style", "test", "chore"];
+
+  const checksBlock = allTypes
+    .map(t => {
+      const checked = t === type ? "[x]" : "[ ]";
+      return `- ${checked} ${changeTypes[t]}`;
+    })
+    .join("\n");
+
+  const scopeNote = scope ? ` in the \`${scope}\` module` : "";
+
+  const summaryItems = changes.length
+    ? changes.slice(0, 5).map(c => `- ${c}`).join("\n")
+    : "- Apply changes as described in the commit message.";
+
+  const testingSteps = generateTestingSteps(type, scope, changes);
+
+  const md = `## Summary
+
+This PR introduces ${title}${scopeNote}.
+
+${summaryItems}
+
+---
+
+## Type of Change
+
+${checksBlock}
+
+---
+
+## Testing Steps
+
+${testingSteps}
+
+---
+
+## Notes
+
+- Commits follow [Conventional Commits](https://www.conventionalcommits.org/) specification.
+- Review scope: \`${scope || "general"}\`
+${changes.length > 5 ? `- ${changes.length - 5} additional minor change(s) not listed above.` : ""}
+`;
+
+  return md.trim();
+}
+
+/**
+ * Generate context-aware testing instructions.
+ */
+function generateTestingSteps(type, scope, changes) {
+  const base = {
+    feat:     "1. Checkout this branch.\n2. Run the application locally.\n3. Navigate to the affected area.\n4. Verify the new functionality works as described.",
+    fix:      "1. Checkout this branch.\n2. Reproduce the original bug with the steps from the linked issue.\n3. Confirm the bug no longer occurs.\n4. Run the existing test suite to check for regressions.",
+    refactor: "1. Checkout this branch.\n2. Run the existing test suite. All tests must pass.\n3. Manually verify that existing behavior is unchanged.",
+    docs:     "1. Checkout this branch.\n2. Open the updated documentation file.\n3. Verify accuracy of all changed sections.",
+    style:    "1. Checkout this branch.\n2. Run the linter: `npm run lint`.\n3. No behavior changes expected. Verify visually if CSS changed.",
+    test:     "1. Checkout this branch.\n2. Run the test suite: `npm test`.\n3. Confirm all new tests pass and coverage has not decreased.",
+    chore:    "1. Checkout this branch.\n2. Run `npm install` if dependencies changed.\n3. Verify the project builds without errors: `npm run build`.",
+  };
+
+  return base[type] || base.chore;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  RENDER: convert Markdown PR to HTML preview
+// ══════════════════════════════════════════════════════════════
+
+function renderMarkdown(md) {
+  const lines = md.split("\n");
+  let html = "";
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith("## ")) {
+      html += `<div class="md-h1">${esc(line.slice(3))}</div>`;
+    } else if (line.startsWith("### ")) {
+      html += `<div class="md-h3">${esc(line.slice(4))}</div>`;
+    } else if (/^- \[[ x]\]/.test(line)) {
+      const checked = line[3] === "x";
+      const text    = esc(line.slice(6));
+      const mark    = checked
+        ? `<span class="checked" aria-hidden="true">✓</span>`
+        : `<span class="unchecked" aria-hidden="true">○</span>`;
+      html += `<div class="md-li md-check">${mark} ${text}</div>`;
+    } else if (/^- /.test(line)) {
+      html += `<div class="md-li">${esc(line.slice(2))}</div>`;
+    } else if (/^\d+\. /.test(line)) {
+      html += `<div class="md-li">${esc(line.replace(/^\d+\. /, ""))}</div>`;
+    } else if (/^---$/.test(line)) {
+      html += `<hr class="md-hr" />`;
+    } else if (line.trim() === "") {
+      // skip blank lines (handled by block spacing)
+    } else {
+      html += `<p class="md-p">${inlineFormat(esc(line))}</p>`;
+    }
+  }
+  return html;
+}
+
+function esc(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function inlineFormat(str) {
+  // `code`
+  return str.replace(/`([^`]+)`/g, `<code class="md-code">$1</code>`);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  COMMIT SYNTAX HIGHLIGHTING: for the terminal-style display
+// ══════════════════════════════════════════════════════════════
+
+function highlightCommit(text) {
+  return text.replace(
+    /^(feat|fix|refactor|docs|style|test|chore)(\([^)]*\))?:(.*)$/m,
+    (_, type, scope, rest) => {
+      const t = `<span class="commit-type">${type}</span>`;
+      const s = scope ? `<span class="commit-scope">${scope}</span>` : "";
+      const r = `<span class="commit-title">:${rest}</span>`;
+      return t + s + r;
+    }
+  ).replace(
+    /(^- .+$)/gm,
+    `<span class="commit-body">$1</span>`
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+//  HISTORY: localStorage, max 5 entries
+// ══════════════════════════════════════════════════════════════
+
+const HISTORY_KEY = "devflow_history_v1";
+const MAX_HISTORY = 5;
+
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(entries) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
+  } catch { /* storage full or private mode */ }
+}
+
+function addHistoryEntry(entry) {
+  const history = loadHistory();
+  history.unshift(entry);
+  if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+  saveHistory(history);
+  renderHistory();
+}
+
+function renderHistory() {
+  const list    = document.getElementById("history-list");
+  const empty   = document.getElementById("history-empty");
+  const history = loadHistory();
+
+  // Clear existing items (preserve the empty placeholder)
+  [...list.querySelectorAll(".history-item")].forEach(el => el.remove());
+
+  if (!history.length) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+
+  for (const entry of history) {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    item.setAttribute("role", "listitem");
+    item.setAttribute("tabindex", "0");
+    item.setAttribute("aria-label", `Restore: ${entry.commitPreview}`);
+
+    const ts = document.createElement("span");
+    ts.className = "history-timestamp";
+    ts.textContent = entry.timestamp;
+
+    const preview = document.createElement("span");
+    preview.className = "history-preview";
+    preview.textContent = entry.commitPreview;
+
+    item.appendChild(ts);
+    item.appendChild(preview);
+
+    // Click or Enter/Space to restore
+    const restore = () => {
+      document.getElementById("diff-input").value = entry.input;
+      // Set scope if stored
+      if (entry.scope) {
+        setScopeValue(entry.scope);
+      }
+      showOutputCards(entry.commit, entry.pr);
+    };
+    item.addEventListener("click", restore);
+    item.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); restore(); }
+    });
+
+    list.appendChild(item);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ══════════════════════════════════════════════════════════════
+
+function showToast(msg, duration = 2200) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), duration);
+}
+
+function showOutputCards(commit, pr) {
+  document.getElementById("empty-state").hidden = true;
+  const cards = document.getElementById("output-cards");
+  cards.hidden = false;
+  cards.style.display = "flex";
+
+  // Commit output
+  const commitEl = document.getElementById("commit-output");
+  commitEl.innerHTML = highlightCommit(commit);
+
+  // PR output
+  document.getElementById("pr-preview").innerHTML = renderMarkdown(pr);
+  document.getElementById("pr-raw").textContent   = pr;
+
+  // Store for copy buttons
+  commitEl.dataset.raw = commit;
+}
+
+function copyToClipboard(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add("copied");
+    btn.querySelector(".copy-label").textContent = "Copied!";
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.querySelector(".copy-label").textContent = btn.id === "copy-commit" ? "Copy commit" : "Copy PR draft";
+    }, 2000);
+  }).catch(() => {
+    showToast("Could not access clipboard. Try Ctrl+C.");
+  });
+}
+
+// Shared scope state: single source of truth for chips + custom input
+let _scopeValue = "";
+
+function getScopeValue() {
+  return _scopeValue;
+}
+
+function setScopeValue(value) {
+  _scopeValue = (value || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 30);
+  _syncScopeUI();
+}
+
+function _syncScopeUI() {
+  const val = _scopeValue;
+  const presetValues = new Set(
+    [...document.querySelectorAll(".scope-chip")].map(c => c.dataset.scope)
+  );
+
+  // Update chips
+  document.querySelectorAll(".scope-chip").forEach(chip => {
+    const isActive = chip.dataset.scope === val;
+    chip.classList.toggle("active", isActive);
+    chip.setAttribute("aria-pressed", String(isActive));
+  });
+
+  // Sync custom input
+  const customEl = document.getElementById("scope-custom");
+  if (presetValues.has(val)) {
+    // preset selected: clear custom field
+    if (customEl.value !== "") customEl.value = "";
+  } else {
+    // custom value: reflect it in input if it differs
+    if (customEl.value !== val) customEl.value = val;
+  }
+
+  // Live preview badge
+  const preview = document.getElementById("scope-preview");
+  if (val) {
+    preview.textContent = `(${val})`;
+    preview.classList.add("has-value");
+  } else {
+    preview.textContent = "";
+    preview.classList.remove("has-value");
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  GENERATION: wires it all together
+// ══════════════════════════════════════════════════════════════
+
+function generate() {
+  const text  = document.getElementById("diff-input").value.trim();
+  const scope = getScopeValue();
+
+  if (!text) {
+    showToast("Paste a git diff or some change notes first.");
+    document.getElementById("diff-input").focus();
+    return;
+  }
+
+  // Loading state
+  const btn = document.getElementById("btn-generate");
+  btn.classList.add("loading");
+  btn.disabled = true;
+
+  // Simulate async processing (parser is synchronous, but UX beat feels right)
+  setTimeout(() => {
+    const { commit, type, scope: detectedScope, title, changes } = generateCommit(text, scope);
+    const pr = generatePR({ type, scope: detectedScope, title, changes });
+
+    showOutputCards(commit, pr);
+
+    // Persist to history
+    const now = new Date();
+    const timestamp = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    addHistoryEntry({
+      input:         text.slice(0, 400),
+      scope:         scope,
+      commit:        commit,
+      pr:            pr,
+      commitPreview: commit.split("\n")[0],
+      timestamp,
+    });
+
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }, 320);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  THEME: dark/light toggle with localStorage persistence
+// ══════════════════════════════════════════════════════════════
+
+const THEME_KEY = "devflow_theme";
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || "dark";
+  applyTheme(saved, false);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  applyTheme(current === "dark" ? "light" : "dark", true);
+}
+
+function applyTheme(theme, save) {
+  const root = document.documentElement;
+  const btn  = document.getElementById("btn-theme");
+  if (theme === "light") {
+    root.setAttribute("data-theme", "light");
+    if (btn) btn.setAttribute("aria-label", "Switch to dark mode");
+  } else {
+    root.removeAttribute("data-theme");
+    if (btn) btn.setAttribute("aria-label", "Switch to light mode");
+  }
+  if (save) localStorage.setItem(THEME_KEY, theme);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  EVENT LISTENERS
+// ══════════════════════════════════════════════════════════════
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  // Generate button
+  document.getElementById("btn-generate").addEventListener("click", generate);
+
+  // Keyboard shortcut: Ctrl/Cmd + Enter in textarea
+  document.getElementById("diff-input").addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      generate();
+    }
+  });
+
+  // Scope chip click: toggle on/off
+  document.getElementById("scope-chips").addEventListener("click", e => {
+    const chip = e.target.closest(".scope-chip");
+    if (!chip) return;
+    const val = chip.dataset.scope;
+    // clicking active chip deselects it
+    setScopeValue(chip.classList.contains("active") ? "" : val);
+  });
+
+  // Custom scope input: live-sync, clears chip selection
+  document.getElementById("scope-custom").addEventListener("input", e => {
+    const raw = e.target.value;
+    // setScopeValue sanitizes; we set _scopeValue directly to allow partial typing
+    _scopeValue = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 30);
+    // deactivate all chips when typing custom
+    document.querySelectorAll(".scope-chip").forEach(c => {
+      c.classList.remove("active");
+      c.setAttribute("aria-pressed", "false");
+    });
+    // update preview badge
+    const preview = document.getElementById("scope-preview");
+    if (_scopeValue) {
+      preview.textContent = `(${_scopeValue})`;
+      preview.classList.add("has-value");
+    } else {
+      preview.textContent = "";
+      preview.classList.remove("has-value");
+    }
+  });
+
+  // Copy commit
+  document.getElementById("copy-commit").addEventListener("click", () => {
+    const raw = document.getElementById("commit-output").dataset.raw || "";
+    copyToClipboard(raw, document.getElementById("copy-commit"));
+  });
+
+  // Copy PR (always copies raw markdown)
+  document.getElementById("copy-pr").addEventListener("click", () => {
+    const raw = document.getElementById("pr-raw").textContent || "";
+    copyToClipboard(raw, document.getElementById("copy-pr"));
+  });
+
+  // Preview / Raw markdown tabs
+  document.querySelectorAll(".tab-btn").forEach(tabBtn => {
+    tabBtn.addEventListener("click", () => {
+      const targetId = tabBtn.dataset.target;
+
+      document.querySelectorAll(".tab-btn").forEach(b => {
+        b.classList.remove("active");
+        b.setAttribute("aria-pressed", "false");
+        b.style.color = "var(--muted)";
+        b.style.background = "transparent";
+      });
+
+      tabBtn.classList.add("active");
+      tabBtn.setAttribute("aria-pressed", "true");
+      tabBtn.style.color = "var(--text)";
+      tabBtn.style.background = "var(--surface2)";
+
+      ["pr-preview", "pr-raw"].forEach(id => {
+        const el = document.getElementById(id);
+        el.hidden = el.id !== targetId;
+      });
+    });
+  });
+
+  // Theme toggle
+  document.getElementById("btn-theme").addEventListener("click", toggleTheme);
+
+  // Init: guarantee output is hidden on every fresh page load
+  const cards = document.getElementById("output-cards");
+  cards.hidden = true;
+  cards.style.display = "";
+  document.getElementById("empty-state").hidden = false;
+  initTheme();
+  renderHistory();
+});
+</script>
+
+<!-- Footer -->
+<footer style="text-align:center;padding:0.75rem 1rem;border-top:1px solid var(--border);font-size:11.5px;color:var(--muted);">
+  DevFlow: offline, no backend, no data leaves your browser
+</footer>
+
+</body>
+</html>
